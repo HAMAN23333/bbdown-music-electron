@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BBDown 音乐批量下载器</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <section class="panel">
+        <h1>BBDown 音乐批量下载器</h1>
+        <p class="sub">
+          每行输入一首歌名，系统将自动检索并评分候选视频，选择最优结果下载音频。
+        </p>
+
+        <label for="songs">歌名列表（每行一首）</label>
+        <textarea id="songs" placeholder="晴天&#10;七里香&#10;稻香"></textarea>
+
+        <div class="grid">
+          <label>
+            下载目录
+            <div class="path-row">
+              <input id="outputDir" type="text" placeholder="默认：用户主目录" />
+              <button id="pickDirBtn" type="button" class="secondary">选择</button>
+            </div>
+          </label>
+          <label>
+            并发数量（1-8）
+            <input id="maxConcurrent" type="number" min="1" max="8" value="2" />
+          </label>
+          <label>
+            搜索排序
+            <select id="orderType">
+              <option value="totalrank">综合排序（totalrank）</option>
+              <option value="pubdate">最新发布（pubdate）</option>
+              <option value="click">最多点击（click）</option>
+              <option value="stow">最多收藏（stow）</option>
+              <option value="dm">最多弹幕（dm）</option>
+              <option value="scores">最多评论（scores）</option>
+            </select>
+          </label>
+          <label>
+            Cookie（可选，会员内容需要）
+            <input id="cookie" type="text" placeholder="SESSDATA=...; bili_jct=...;" />
+          </label>
+          <label>
+            时长筛选（分钟，-1表示不限）
+            <input id="timeRange" type="number" min="-1" max="720" value="-1" />
+          </label>
+          <label>
+            视频分区 tid（可选）
+            <input id="videoZoneType" type="number" min="0" placeholder="如 3 表示音乐分区" />
+          </label>
+          <label>
+            发布时间开始（可选）
+            <input id="timeStart" type="date" />
+          </label>
+          <label>
+            发布时间结束（可选）
+            <input id="timeEnd" type="date" />
+          </label>
+          <label>
+            每页候选数量（1-42）
+            <input id="pageSize" type="number" min="1" max="42" value="20" />
+          </label>
+          <label>
+            评分候选上限（1-20）
+            <input id="maxCandidates" type="number" min="1" max="20" value="8" />
+          </label>
+        </div>
+
+        <button id="startBtn">开始批量下载</button>
+        <p id="hint" class="hint"></p>
+      </section>
+
+      <section class="panel result-panel">
+        <h2>任务状态</h2>
+        <div id="summary" class="summary">暂无任务</div>
+        <div id="items"></div>
+
+        <h3>运行日志</h3>
+        <pre id="logs" class="logs">-</pre>
+      </section>
+    </main>
+
+    <script>
+      const el = (id) => document.getElementById(id);
+      const startBtn = el("startBtn");
+      const hint = el("hint");
+      const songs = el("songs");
+      const outputDir = el("outputDir");
+      const pickDirBtn = el("pickDirBtn");
+      const maxConcurrent = el("maxConcurrent");
+      const orderType = el("orderType");
+      const cookie = el("cookie");
+      const timeRange = el("timeRange");
+      const videoZoneType = el("videoZoneType");
+      const timeStart = el("timeStart");
+      const timeEnd = el("timeEnd");
+      const pageSize = el("pageSize");
+      const maxCandidates = el("maxCandidates");
+      const summary = el("summary");
+      const items = el("items");
+      const logs = el("logs");
+
+      let currentJobId = null;
+      let pollTimer = null;
+
+      boot();
+
+      async function boot() {
+        try {
+          const resp = await fetch("/api/health");
+          const data = await resp.json();
+          if (resp.ok) {
+            if (data.defaultOutputDir && !outputDir.value) {
+              outputDir.value = data.defaultOutputDir;
+            }
+            setHint(
+              data.bundledBbdownReady
+                ? `项目内置 BBDown 已就绪：${data.bundledBbdownPath}`
+                : `未找到项目内置 BBDown：${data.bundledBbdownPath}`
+            );
+          }
+        } catch (err) {
+          setHint(`健康检查失败：${err.message}`, true);
+        }
+      }
+
+      startBtn.addEventListener("click", async () => {
+        clearPolling();
+        setHint("");
+        items.innerHTML = "";
+        logs.textContent = "-";
+        summary.textContent = "提交任务中...";
+
+        const payload = {
+          songs: songs.value,
+          outputDir: outputDir.value,
+          maxConcurrent: Number(maxConcurrent.value || 2),
+          cookie: cookie.value,
+          orderType: orderType.value,
+          timeRange: Number(timeRange.value || -1),
+          videoZoneType: videoZoneType.value,
+          timeStart: timeStart.value,
+          timeEnd: timeEnd.value,
+          pageSize: Number(pageSize.value || 20),
+          maxCandidates: Number(maxCandidates.value || 8),
+        };
+
+        try {
+          const resp = await fetch("/api/jobs", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await resp.json();
+          if (!resp.ok) {
+            throw new Error(data.error || "创建任务失败");
+          }
+          currentJobId = data.jobId;
+          setHint(`任务已创建：${currentJobId}`);
+          await refreshJob();
+          pollTimer = setInterval(refreshJob, 1500);
+        } catch (err) {
+          setHint(`错误：${err.message}`, true);
+          summary.textContent = "暂无任务";
+        }
+      });
+
+      pickDirBtn.addEventListener("click", async () => {
+        if (!window.desktopApi || typeof window.desktopApi.pickDownloadDirectory !== "function") {
+          setHint("当前运行环境不支持系统目录选择，请手动输入路径。", true);
+          return;
+        }
+        try {
+          const selected = await window.desktopApi.pickDownloadDirectory();
+          if (selected) {
+            outputDir.value = selected;
+            setHint(`已选择下载目录：${selected}`);
+          }
+        } catch (err) {
+          setHint(`选择目录失败：${err.message}`, true);
+        }
+      });
+
+      async function refreshJob() {
+        if (!currentJobId) return;
+        try {
+          const resp = await fetch(`/api/jobs/${currentJobId}`);
+          const data = await resp.json();
+          if (!resp.ok) {
+            throw new Error(data.error || "读取任务失败");
+          }
+          renderJob(data);
+          if (!["running"].includes(data.status)) {
+            clearPolling();
+          }
+        } catch (err) {
+          setHint(`状态刷新失败：${err.message}`, true);
+          clearPolling();
+        }
+      }
+
+      function renderJob(job) {
+        summary.textContent =
+          `状态: ${job.status} | ` +
+          `总数: ${job.total} | ` +
+          `完成: ${job.completed} | ` +
+          `成功: ${job.success} | ` +
+          `失败: ${job.failed}`;
+
+        items.innerHTML = job.items
+          .map(
+            (it) => `
+            <article class="item ${it.status}">
+              <div class="title">${escapeHtml(it.song)}</div>
+              <div class="meta">
+                <span>状态：${escapeHtml(it.status)}</span>
+                <span>${escapeHtml(it.message || "")}</span>
+                ${it.search ? `<span>BVID：${escapeHtml(it.search.bvid || "")}</span>` : ""}
+                ${it.search ? `<span>评分：${escapeHtml(String(it.search.score ?? ""))}</span>` : ""}
+              </div>
+            </article>
+          `
+          )
+          .join("");
+
+        logs.textContent = job.logs.map((x) => `[${x.time}] ${x.message}`).join("\n") || "-";
+      }
+
+      function clearPolling() {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }
+
+      function setHint(text, isError = false) {
+        hint.textContent = text;
+        hint.className = isError ? "hint error" : "hint";
+      }
+
+      function escapeHtml(str) {
+        return String(str || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;");
+      }
+    </script>
+  </body>
+</html>

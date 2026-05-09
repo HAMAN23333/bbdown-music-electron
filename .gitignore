@@ -1,0 +1,16 @@
+# runtime artifacts
+dist/
+tmp/
+downloads/
+
+# local logs
+*.log
+
+# local OS noise
+.DS_Store
+Thumbs.db
+
+# bundled tool cache (downloaded locally)
+tools/bbdown/BBDown.exe
+tools/bbdown/*.zip
+tools/bbdown/_extract/

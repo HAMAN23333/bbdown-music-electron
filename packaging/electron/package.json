@@ -1,0 +1,7 @@
+{
+  "name": "bbdown-music-electron",
+  "version": "1.0.0",
+  "main": "main.js",
+  "description": "BBDown music downloader desktop app",
+  "license": "MIT"
+}
