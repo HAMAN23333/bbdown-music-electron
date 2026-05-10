@@ -2,11 +2,12 @@
 
 一个本地 Web UI 工具：批量输入多个歌名，自动在 B 站检索并下载音频。
 
-当前版本完成了两项核心改造：
+当前版本完成了三项核心改造：
 
 - 搜索链路按 `Nemo2011/bilibili-api` 的 `search.py` 思路重构（`web_search_by_type` + `web_search`，并支持 `order/duration/tids/pubtime` 参数）
 - `BBDown` 固定从项目目录 `tools/bbdown/BBDown.exe` 启动，不依赖系统全局 `BBDown`
 - 下载后支持调用项目内置 `FFmpeg` 转码为 `mp3/m4a/aac/flac/wav/ogg/opus`，并可设置比特率
+- 前端重构为 `Next.js + TypeScript + Tailwind CSS + shadcn/ui + React Hook Form + Zod + TanStack Query`
 
 ## 功能
 
@@ -22,12 +23,42 @@
 ## 环境要求
 
 - Windows 10/11 x64
-- Node.js 18+（当前代码无第三方依赖）
+- Node.js 20+
 - PowerShell 5.1+（用于下载 BBDown / FFmpeg 与打包 Electron）
 - 首次使用需执行 `scripts/setup-bbdown.ps1` 下载项目内置 `BBDown.exe`
 - 首次使用需执行 `scripts/setup-ffmpeg.ps1` 下载项目内置 `ffmpeg.exe`
 
-## 启动
+## 前端开发模式（推荐）
+
+安装依赖：
+
+```powershell
+npm install
+```
+
+分别启动后端 API 与 Next.js 前端：
+
+```powershell
+npm run dev:api
+```
+
+```powershell
+npm run dev
+```
+
+浏览器访问：
+
+`http://127.0.0.1:3000`
+
+## 集成运行（server.js 托管静态前端）
+
+先构建前端静态导出：
+
+```powershell
+npm run build
+```
+
+再启动后端服务：
 
 在项目目录执行：
 
@@ -44,6 +75,8 @@ node server.js
 浏览器访问：
 
 `http://127.0.0.1:5050`
+
+说明：`server.js` 仅托管 `out/`（Next.js 构建产物）。若 `out/index.html` 不存在，会返回“请先执行 npm run build”。
 
 可先验证健康接口：
 
@@ -92,6 +125,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup-ffmpeg.ps1
 - 转码通过项目内置 `tools/ffmpeg/ffmpeg.exe` 执行，不调用系统 PATH 中的 ffmpeg。  
 - 当前后端只调用项目内置 `tools/bbdown/BBDown.exe`，不会调用系统路径下的 BBDown。  
 - `scripts/setup-bbdown.ps1`、`scripts/setup-ffmpeg.ps1` 与 `scripts/build-electron-portable.ps1` 默认会校验 GitHub release 资产 SHA256（来自 release asset digest）。  
+- 后端已拆分为 `infra + services` 分层：  
+  - `server/infra/process-runner.js`：统一子进程执行（结构化参数）  
+  - `server/infra/platform-api-client.js`：统一平台 HTTP 调用封装  
+  - `server/infra/tool-resolver.js` + `server/infra/binary-manager.js`：统一内置工具解析与校验  
+  - `server/services/bilibili-search-service.js`：B 站搜索与 Cookie 策略  
+  - `server/services/audio-download-service.js`：BBDown 下载与 FFmpeg 转码  
+
+## 前端结构（重构后）
+
+- `app/page.tsx`：页面入口，仅做布局组合  
+- `components/app-shell.tsx`：双栏主界面容器  
+- `components/song-input-panel.tsx`：歌曲输入区  
+- `components/download-settings-panel.tsx`：下载参数区  
+- `components/search-filter-panel.tsx`：搜索筛选区  
+- `components/cookie-panel.tsx`：账号/Cookie 区  
+- `components/task-status-panel.tsx`：任务状态与进度  
+- `components/log-panel.tsx`：控制台风格日志区  
+- `components/action-bar.tsx`：主操作按钮区  
+- `hooks/use-download-task.ts`：任务创建/轮询状态  
+- `hooks/use-cookie-status.ts`：Cookie 登录/检查状态  
+- `services/download-service.ts`：API 请求封装  
+- `lib/schema.ts`：Zod schema 与默认值  
 
 ## 常见问题
 

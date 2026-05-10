@@ -2,6 +2,10 @@
 dist/
 tmp/
 downloads/
+.next/
+out/
+node_modules/
+*.tsbuildinfo
 
 # local logs
 *.log

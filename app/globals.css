@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "Segoe UI";
+  --background: 220 35% 98%;
+  --foreground: 224 24% 14%;
+  --card: 0 0% 100%;
+  --card-foreground: 224 24% 14%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 224 24% 14%;
+  --primary: 219 78% 52%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 215 25% 94%;
+  --secondary-foreground: 224 24% 14%;
+  --muted: 214 24% 94%;
+  --muted-foreground: 220 14% 44%;
+  --accent: 214 30% 92%;
+  --accent-foreground: 224 24% 14%;
+  --destructive: 0 78% 48%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214 22% 88%;
+  --input: 214 22% 88%;
+  --ring: 219 78% 52%;
+  --radius: 0.65rem;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  min-height: 100vh;
+  background: radial-gradient(circle at top left, hsl(221 55% 95%), hsl(var(--background)) 32%);
+}
+
+.console-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}

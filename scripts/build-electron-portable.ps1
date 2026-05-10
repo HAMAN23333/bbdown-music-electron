@@ -18,6 +18,8 @@ $DistBase = Join-Path $Root "dist"
 $WorkDir = Join-Path $DistBase "$AppName-electron"
 $ZipPath = Join-Path $DistBase "$AppName-electron-win64-portable.zip"
 $TmpDir = Join-Path $Root "tmp"
+$FrontendOutDir = Join-Path $Root "out"
+$FrontendIndex = Join-Path $FrontendOutDir "index.html"
 
 $ElectronAssetName = "electron-v$ElectronVersion-win32-x64.zip"
 $ElectronZip = Join-Path $TmpDir $ElectronAssetName
@@ -115,6 +117,27 @@ function Ensure-BundledTool([string]$ToolName, [string]$ExePath, [string]$SetupS
     Write-Host "[$ToolName] setup completed: $ExePath"
 }
 
+function Ensure-FrontendBuild([string]$RootDir, [string]$OutIndexPath) {
+    if (Test-Path $OutIndexPath) {
+        Write-Host "[frontend] use existing export: $OutIndexPath"
+        return
+    }
+
+    Write-Host "[frontend] out/index.html missing, run npm run build"
+    Push-Location $RootDir
+    try {
+        npm run build
+    }
+    finally {
+        Pop-Location
+    }
+
+    if (-not (Test-Path $OutIndexPath)) {
+        throw "[frontend] build finished but out/index.html still missing: $OutIndexPath"
+    }
+    Write-Host "[frontend] build completed: $OutIndexPath"
+}
+
 $expectedElectronSha256 = Get-ReleaseAssetSha256 -ReleaseApi $ElectronReleaseApi -AssetName $ElectronAssetName -AllowMissingDigestFlag:$AllowMissingDigest
 if (-not [string]::IsNullOrWhiteSpace($expectedElectronSha256)) {
     Write-Host "[electron] expected sha256: $expectedElectronSha256"
@@ -173,13 +196,14 @@ $SetupFfmpegScript = Join-Path $PSScriptRoot "setup-ffmpeg.ps1"
 
 Ensure-BundledTool -ToolName "bbdown" -ExePath $BundledBbdownExe -SetupScriptPath $SetupBbdownScript -AllowMissingDigestFlag:$AllowMissingDigest
 Ensure-BundledTool -ToolName "ffmpeg" -ExePath $BundledFfmpegExe -SetupScriptPath $SetupFfmpegScript -AllowMissingDigestFlag:$AllowMissingDigest
+Ensure-FrontendBuild -RootDir $Root -OutIndexPath $FrontendIndex
 
 Copy-Item -Force (Join-Path $Root "packaging\electron\package.json") (Join-Path $ResourcesApp "package.json")
 Copy-Item -Force (Join-Path $Root "packaging\electron\main.js") (Join-Path $ResourcesApp "main.js")
 Copy-Item -Force (Join-Path $Root "packaging\electron\preload.js") (Join-Path $ResourcesApp "preload.js")
 
 Copy-Item -Force (Join-Path $Root "server.js") (Join-Path $ResourcesApp "server.js")
-Copy-Item -Recurse -Force (Join-Path $Root "public") (Join-Path $ResourcesApp "public")
+Copy-Item -Recurse -Force $FrontendOutDir (Join-Path $ResourcesApp "out")
 Copy-Item -Recurse -Force (Join-Path $Root "tools") (Join-Path $ResourcesApp "tools")
 New-Item -ItemType Directory -Force -Path (Join-Path $ResourcesApp "downloads") | Out-Null
 
