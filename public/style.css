@@ -85,7 +85,6 @@ textarea {
 
 .path-row .secondary {
   margin-top: 0;
-  background: #475569;
   padding: 10px 12px;
   white-space: nowrap;
 }
@@ -110,6 +109,14 @@ button {
 
 button:hover {
   opacity: 0.95;
+}
+
+button.secondary {
+  background: #475569;
+}
+
+button.danger {
+  background: #b42318;
 }
 
 .hint {
@@ -167,4 +174,42 @@ button:hover {
   max-height: 260px;
   overflow: auto;
   white-space: pre-wrap;
+}
+
+.cookie-panel {
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: #fafcff;
+}
+
+.cookie-panel-head {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+}
+
+.cookie-panel-head label {
+  margin-bottom: 0;
+}
+
+.cookie-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cookie-actions button {
+  margin-top: 0;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 10px;
+}
+
+.cookie-input {
+  min-height: 90px;
+  font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
 }

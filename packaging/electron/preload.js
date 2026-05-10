@@ -9,4 +9,7 @@ contextBridge.exposeInMainWorld("desktopMeta", {
 
 contextBridge.exposeInMainWorld("desktopApi", {
   pickDownloadDirectory: () => ipcRenderer.invoke("pick-download-dir"),
+  bilibiliLoginAndGetCookie: () => ipcRenderer.invoke("bili-login-cookie"),
+  getBilibiliCookieSnapshot: () => ipcRenderer.invoke("get-bili-cookie-snapshot"),
+  clearBilibiliCookies: () => ipcRenderer.invoke("clear-bili-cookies"),
 });

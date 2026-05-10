@@ -28,6 +28,7 @@ const AUDIO_DISCOVER_EXTS = new Set([".m4a", ".mp3", ".aac", ".flac", ".wav", ".
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const MAX_LOG_ENTRIES = 300;
+const REQUIRED_BILIBILI_COOKIE_KEYS = ["SESSDATA", "bili_jct", "DedeUserID"];
 let cachedSearchCookie = "";
 
 /** @type {Map<string, any>} */
@@ -86,6 +87,7 @@ async function route(req, res) {
     const maxConcurrent = clampInt(body.maxConcurrent, 2, 1, 8);
     const outputDir = resolveOutputDir(body.outputDir);
     const cookie = normalizeText(body.cookie);
+    applyCookieToSearchCache(cookie);
     const searchOptions = parseSearchOptions(body);
     const downloadOptions = parseDownloadOptions(body);
 
@@ -108,6 +110,19 @@ async function route(req, res) {
     });
 
     return sendJson(res, 201, { jobId: job.id });
+  }
+
+  if (req.method === "POST" && pathname === "/api/cookie/inspect") {
+    const body = await readJsonBody(req);
+    const cookie = normalizeText(body.cookie);
+    const inspect = inspectCookieText(cookie);
+    if (cookie && body.apply !== false) {
+      applyCookieToSearchCache(cookie);
+    }
+    return sendJson(res, 200, {
+      ...inspect,
+      appliedToSearch: Boolean(cookie && body.apply !== false),
+    });
   }
 
   if (req.method === "GET" && pathname.startsWith("/api/jobs/")) {
@@ -847,6 +862,30 @@ function parseSetCookieKV(setCookieLine) {
   const value = first.slice(idx + 1).trim();
   if (!key || !value) return null;
   return { key, value };
+}
+
+function inspectCookieText(cookieText) {
+  const map = parseCookieHeader(cookieText);
+  const keys = Array.from(map.keys());
+  const missingKeys = REQUIRED_BILIBILI_COOKIE_KEYS.filter((key) => !map.has(key));
+  return {
+    hasCookie: map.size > 0,
+    hasRequired: missingKeys.length === 0,
+    missingKeys,
+    cookieKeys: keys.slice(0, 100),
+  };
+}
+
+function applyCookieToSearchCache(cookieText) {
+  const incoming = parseCookieHeader(cookieText);
+  if (incoming.size === 0) return;
+  const existing = parseCookieHeader(cachedSearchCookie);
+  for (const [k, v] of incoming.entries()) {
+    existing.set(k, v);
+  }
+  cachedSearchCookie = Array.from(existing.entries())
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
 }
 
 function parseCookieHeader(header) {

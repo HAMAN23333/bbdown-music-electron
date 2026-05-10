@@ -41,10 +41,6 @@
             </select>
           </label>
           <label>
-            Cookie（可选，会员内容需要）
-            <input id="cookie" type="text" placeholder="SESSDATA=...; bili_jct=...;" />
-          </label>
-          <label>
             输出格式
             <select id="audioFormat">
               <option value="mp3">mp3（推荐）</option>
@@ -87,6 +83,25 @@
           </label>
         </div>
 
+        <section class="cookie-panel">
+          <div class="cookie-panel-head">
+            <label for="cookie">B 站 Cookie（会员内容通常需要）</label>
+            <div class="cookie-actions">
+              <button id="biliLoginBtn" type="button" class="secondary">
+                内置登录（扫码/账号密码）
+              </button>
+              <button id="cookieCheckBtn" type="button" class="secondary">检查 Cookie</button>
+              <button id="clearCookieBtn" type="button" class="danger">清空 Cookie</button>
+            </div>
+          </div>
+          <textarea
+            id="cookie"
+            class="cookie-input"
+            placeholder="可手动粘贴：SESSDATA=...; bili_jct=...; DedeUserID=...;"
+          ></textarea>
+          <p id="cookieInfo" class="hint">可手动输入，或点“内置登录”自动获取。</p>
+        </section>
+
         <button id="startBtn">开始批量下载</button>
         <p id="hint" class="hint"></p>
       </section>
@@ -111,6 +126,10 @@
       const maxConcurrent = el("maxConcurrent");
       const orderType = el("orderType");
       const cookie = el("cookie");
+      const cookieInfo = el("cookieInfo");
+      const biliLoginBtn = el("biliLoginBtn");
+      const cookieCheckBtn = el("cookieCheckBtn");
+      const clearCookieBtn = el("clearCookieBtn");
       const audioFormat = el("audioFormat");
       const audioBitrateKbps = el("audioBitrateKbps");
       const timeRange = el("timeRange");
@@ -126,13 +145,20 @@
       let currentJobId = null;
       let pollTimer = null;
       const BITRATE_DISABLED_FORMATS = new Set(["original", "flac", "wav"]);
+      const COOKIE_STORAGE_KEY = "bbdown.music.cookie.v1";
+      let cookieActionBusy = false;
 
       boot();
       syncBitrateState();
+      loadCookieFromStorage();
 
       audioFormat.addEventListener("change", syncBitrateState);
+      cookie.addEventListener("input", () => {
+        persistCookie(cookie.value);
+      });
 
       async function boot() {
+        setCookieInfo("可手动输入，或点“内置登录”自动获取。");
         try {
           const resp = await fetch("/api/health");
           const data = await resp.json();
@@ -153,6 +179,12 @@
           }
         } catch (err) {
           setHint(`健康检查失败：${err.message}`, true);
+        }
+        await tryHydrateCookieFromElectron();
+        try {
+          await inspectCookie(false);
+        } catch (err) {
+          setCookieInfo(`Cookie 检查失败：${err.message}`, true);
         }
       }
 
@@ -212,6 +244,66 @@
           }
         } catch (err) {
           setHint(`选择目录失败：${err.message}`, true);
+        }
+      });
+
+      biliLoginBtn.addEventListener("click", async () => {
+        if (!window.desktopApi || typeof window.desktopApi.bilibiliLoginAndGetCookie !== "function") {
+          setCookieInfo("当前运行环境不支持内置登录，请手动粘贴 Cookie。", true);
+          return;
+        }
+        if (cookieActionBusy) return;
+        setCookieActionBusy(true);
+        setCookieInfo("请在弹出的 B 站登录窗口完成扫码或账号密码登录...");
+        try {
+          const result = await window.desktopApi.bilibiliLoginAndGetCookie();
+          const cookieText = result && result.cookie ? String(result.cookie) : "";
+          if (!cookieText) {
+            throw new Error("未获取到 Cookie，请重试。");
+          }
+          cookie.value = cookieText;
+          persistCookie(cookieText);
+          await inspectCookie(true);
+          setCookieInfo(
+            `登录成功，已自动获取 Cookie（${(result.cookieKeys || []).length || 0} 个键）。`
+          );
+        } catch (err) {
+          setCookieInfo(`自动登录失败：${err.message}`, true);
+        } finally {
+          setCookieActionBusy(false);
+        }
+      });
+
+      cookieCheckBtn.addEventListener("click", async () => {
+        if (cookieActionBusy) return;
+        setCookieActionBusy(true);
+        try {
+          await inspectCookie(true);
+        } catch (err) {
+          setCookieInfo(`Cookie 检查失败：${err.message}`, true);
+        } finally {
+          setCookieActionBusy(false);
+        }
+      });
+
+      clearCookieBtn.addEventListener("click", async () => {
+        if (cookieActionBusy) return;
+        setCookieActionBusy(true);
+        try {
+          cookie.value = "";
+          persistCookie("");
+          let msg = "已清空手动 Cookie。";
+          if (window.desktopApi && typeof window.desktopApi.clearBilibiliCookies === "function") {
+            try {
+              const result = await window.desktopApi.clearBilibiliCookies();
+              msg += ` 已清理内置会话 Cookie ${Number(result?.removed || 0)} 个。`;
+            } catch (err) {
+              msg += ` 内置会话清理失败：${err.message}`;
+            }
+          }
+          setCookieInfo(msg);
+        } finally {
+          setCookieActionBusy(false);
         }
       });
 
@@ -280,6 +372,82 @@
       function setHint(text, isError = false) {
         hint.textContent = text;
         hint.className = isError ? "hint error" : "hint";
+      }
+
+      function setCookieInfo(text, isError = false) {
+        cookieInfo.textContent = text;
+        cookieInfo.className = isError ? "hint error" : "hint";
+      }
+
+      function setCookieActionBusy(busy) {
+        cookieActionBusy = busy;
+        biliLoginBtn.disabled = busy;
+        cookieCheckBtn.disabled = busy;
+        clearCookieBtn.disabled = busy;
+      }
+
+      function persistCookie(value) {
+        try {
+          const text = String(value || "").trim();
+          if (!text) {
+            localStorage.removeItem(COOKIE_STORAGE_KEY);
+            return;
+          }
+          localStorage.setItem(COOKIE_STORAGE_KEY, text);
+        } catch {
+          // ignore storage errors
+        }
+      }
+
+      function loadCookieFromStorage() {
+        try {
+          if (cookie.value) return;
+          const saved = localStorage.getItem(COOKIE_STORAGE_KEY) || "";
+          if (saved) {
+            cookie.value = saved;
+          }
+        } catch {
+          // ignore storage errors
+        }
+      }
+
+      async function tryHydrateCookieFromElectron() {
+        if (!window.desktopApi || typeof window.desktopApi.getBilibiliCookieSnapshot !== "function") {
+          return;
+        }
+        try {
+          if (cookie.value.trim()) return;
+          const snapshot = await window.desktopApi.getBilibiliCookieSnapshot();
+          if (snapshot && snapshot.hasRequired && snapshot.cookie) {
+            cookie.value = String(snapshot.cookie);
+            persistCookie(cookie.value);
+            setCookieInfo("检测到已登录的内置会话，已自动回填 Cookie。");
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      async function inspectCookie(apply = true) {
+        const cookieText = String(cookie.value || "").trim();
+        if (!cookieText) {
+          setCookieInfo("当前未填写 Cookie。可手动输入，或点“内置登录”自动获取。");
+          return;
+        }
+        const resp = await fetch("/api/cookie/inspect", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ cookie: cookieText, apply }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          throw new Error(data.error || "Cookie 检查失败");
+        }
+        if (data.hasRequired) {
+          setCookieInfo("Cookie 已包含 SESSDATA / bili_jct / DedeUserID，可用于下载受限内容。");
+        } else {
+          setCookieInfo(`Cookie 不完整，缺少：${(data.missingKeys || []).join(", ")}`, true);
+        }
       }
 
       function escapeHtml(str) {
