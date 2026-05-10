@@ -203,6 +203,7 @@ Copy-Item -Force (Join-Path $Root "packaging\electron\main.js") (Join-Path $Reso
 Copy-Item -Force (Join-Path $Root "packaging\electron\preload.js") (Join-Path $ResourcesApp "preload.js")
 
 Copy-Item -Force (Join-Path $Root "server.js") (Join-Path $ResourcesApp "server.js")
+Copy-Item -Recurse -Force (Join-Path $Root "server") (Join-Path $ResourcesApp "server")
 Copy-Item -Recurse -Force $FrontendOutDir (Join-Path $ResourcesApp "out")
 Copy-Item -Recurse -Force (Join-Path $Root "tools") (Join-Path $ResourcesApp "tools")
 New-Item -ItemType Directory -Force -Path (Join-Path $ResourcesApp "downloads") | Out-Null
