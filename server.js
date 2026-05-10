@@ -14,11 +14,17 @@ const TOOLS_DIR = path.join(ROOT_DIR, "tools");
 const BBDOWN_DIR = path.join(TOOLS_DIR, "bbdown");
 const BBDOWN_BIN_NAME = process.platform === "win32" ? "BBDown.exe" : "BBDown";
 const BBDOWN_BIN_PATH = path.join(BBDOWN_DIR, BBDOWN_BIN_NAME);
+const FFMPEG_DIR = path.join(TOOLS_DIR, "ffmpeg");
+const FFMPEG_BIN_NAME = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+const FFMPEG_BIN_PATH = path.join(FFMPEG_DIR, FFMPEG_BIN_NAME);
 // 对齐 Nemo2011/bilibili-api: web_search_by_type + web_search (均使用 wbi 路径)
 const SEARCH_API_TYPE = "https://api.bilibili.com/x/web-interface/wbi/search/type";
 const SEARCH_API_ALL = "https://api.bilibili.com/x/web-interface/wbi/search/all/v2";
 const SEARCH_API_SUGGEST = "https://s.search.bilibili.com/main/suggest";
 const VIDEO_ORDER_TYPES = new Set(["totalrank", "click", "pubdate", "dm", "stow", "scores"]);
+const AUDIO_FORMAT_TYPES = new Set(["original", "mp3", "m4a", "aac", "flac", "wav", "ogg", "opus"]);
+const AUDIO_LOSSLESS_FORMATS = new Set(["flac", "wav"]);
+const AUDIO_DISCOVER_EXTS = new Set([".m4a", ".mp3", ".aac", ".flac", ".wav", ".ogg", ".opus", ".mka", ".webm"]);
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 const MAX_LOG_ENTRIES = 300;
@@ -30,6 +36,7 @@ const jobs = new Map();
 function main() {
   ensureDir(DEFAULT_OUTPUT_DIR);
   ensureDir(BBDOWN_DIR);
+  ensureDir(FFMPEG_DIR);
   const server = http.createServer((req, res) => route(req, res).catch((err) => handleRouteError(res, err)));
   server.on("error", (err) => {
     const code = err && err.code ? err.code : "UNKNOWN";
@@ -54,6 +61,8 @@ async function route(req, res) {
       time: new Date().toISOString(),
       bundledBbdownPath: BBDOWN_BIN_PATH,
       bundledBbdownReady: fs.existsSync(BBDOWN_BIN_PATH),
+      bundledFfmpegPath: FFMPEG_BIN_PATH,
+      bundledFfmpegReady: fs.existsSync(FFMPEG_BIN_PATH),
       defaultOutputDir: DEFAULT_OUTPUT_DIR,
     });
   }
@@ -78,6 +87,7 @@ async function route(req, res) {
     const outputDir = resolveOutputDir(body.outputDir);
     const cookie = normalizeText(body.cookie);
     const searchOptions = parseSearchOptions(body);
+    const downloadOptions = parseDownloadOptions(body);
 
     ensureDir(outputDir);
 
@@ -87,6 +97,7 @@ async function route(req, res) {
       maxConcurrent,
       cookie,
       searchOptions,
+      downloadOptions,
     });
     jobs.set(job.id, job);
     trimOldJobs();
@@ -151,9 +162,20 @@ async function runJob(job) {
   addJobLog(job, `任务开始，共 ${job.total} 首，最大并发 ${job.options.maxConcurrent}`);
   const bundledBbdownPath = resolveBundledBbdownPath();
   addJobLog(job, `使用项目内置 BBDown: ${bundledBbdownPath}`);
+  let bundledFfmpegPath = "";
+  if (job.options.downloadOptions.audioFormat !== "original") {
+    bundledFfmpegPath = resolveBundledFfmpegPath();
+    addJobLog(job, `使用项目内置 FFmpeg: ${bundledFfmpegPath}`);
+  }
+  addJobLog(
+    job,
+    job.options.downloadOptions.bitrateIgnored
+      ? `输出格式: ${job.options.downloadOptions.audioFormat}（当前格式忽略比特率设置）`
+      : `输出格式: ${job.options.downloadOptions.audioFormat}, 比特率: ${job.options.downloadOptions.audioBitrateKbps}kbps`
+  );
 
   await mapLimit(job.items, job.options.maxConcurrent, async (item) => {
-    await processSong(job, item, bundledBbdownPath);
+    await processSong(job, item, bundledBbdownPath, bundledFfmpegPath);
   });
 
   job.finishedAt = new Date().toISOString();
@@ -167,7 +189,8 @@ async function runJob(job) {
   addJobLog(job, `任务结束，成功 ${job.success}，失败 ${job.failed}`);
 }
 
-async function processSong(job, item, bundledBbdownPath) {
+async function processSong(job, item, bundledBbdownPath, bundledFfmpegPath) {
+  const workDir = makeSongWorkDir(job.id, item.id);
   item.startedAt = new Date().toISOString();
   item.status = "searching";
   item.message = "正在检索 B 站视频";
@@ -183,21 +206,34 @@ async function processSong(job, item, bundledBbdownPath) {
 
     const downloadResult = await runBbdown({
       videoUrl: match.url,
-      outputDir: job.options.outputDir,
+      workDir,
       bbdownPath: bundledBbdownPath,
       cookie: job.options.cookie,
+      ffmpegPath: bundledFfmpegPath,
     });
-    item.output = downloadResult.lines;
+    item.status = "post_processing";
+    item.message = "正在整理音频文件";
+    touchJob(job);
+
+    const postResult = await finalizeDownloadedAudio({
+      workDir,
+      outputDir: job.options.outputDir,
+      audioFormat: job.options.downloadOptions.audioFormat,
+      audioBitrateKbps: job.options.downloadOptions.audioBitrateKbps,
+      ffmpegPath: bundledFfmpegPath,
+    });
+    item.output = [...downloadResult.lines, ...postResult.lines];
     item.status = "success";
-    item.message = "下载成功";
+    item.message = `下载成功，输出 ${postResult.outputFiles.length} 个文件`;
     job.success += 1;
-    addJobLog(job, `【${item.song}】下载成功`);
+    addJobLog(job, `【${item.song}】下载成功: ${postResult.outputFiles.map((x) => path.basename(x)).join(", ")}`);
   } catch (err) {
     item.status = "failed";
     item.message = err.message;
     job.failed += 1;
     addJobLog(job, `【${item.song}】失败: ${err.message}`);
   } finally {
+    cleanupSongWorkDir(workDir);
     item.finishedAt = new Date().toISOString();
     job.completed += 1;
     touchJob(job);
@@ -268,16 +304,20 @@ async function searchByAll(song, options) {
   return rows.map(normalizeVideoItem).filter((x) => Boolean(x.bvid));
 }
 
-function runBbdown({ videoUrl, outputDir, bbdownPath, cookie }) {
+function runBbdown({ videoUrl, workDir, bbdownPath, cookie, ffmpegPath }) {
   return new Promise((resolve, reject) => {
+    ensureDir(workDir);
     const args = [
       videoUrl,
       "--audio-only",
       "--work-dir",
-      outputDir,
+      workDir,
       "--skip-cover",
       "--skip-subtitle",
     ];
+    if (ffmpegPath) {
+      args.push("--ffmpeg-path", ffmpegPath);
+    }
     if (cookie) {
       args.push("-c", cookie);
     }
@@ -347,6 +387,218 @@ function resolveBundledBbdownPath() {
       ? "请执行 scripts\\setup-bbdown.ps1 下载项目内置 BBDown"
       : "请将 BBDown 可执行文件放到 tools/bbdown 目录";
   throw new Error(`项目内置 BBDown 不存在: ${BBDOWN_BIN_PATH}。${setupHint}`);
+}
+
+function resolveBundledFfmpegPath() {
+  if (fs.existsSync(FFMPEG_BIN_PATH)) {
+    return FFMPEG_BIN_PATH;
+  }
+  const setupHint =
+    process.platform === "win32"
+      ? "请执行 scripts\\setup-ffmpeg.ps1 下载项目内置 FFmpeg"
+      : "请将 ffmpeg 可执行文件放到 tools/ffmpeg 目录";
+  throw new Error(`项目内置 FFmpeg 不存在: ${FFMPEG_BIN_PATH}。${setupHint}`);
+}
+
+function makeSongWorkDir(jobId, itemId) {
+  return path.join(ROOT_DIR, "tmp", "jobs", jobId, `item-${itemId}`);
+}
+
+function cleanupSongWorkDir(workDir) {
+  try {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  } catch {
+    // ignore cleanup errors
+  }
+}
+
+async function finalizeDownloadedAudio({ workDir, outputDir, audioFormat, audioBitrateKbps, ffmpegPath }) {
+  ensureDir(outputDir);
+  const sourceFiles = discoverDownloadedAudioFiles(workDir);
+  if (sourceFiles.length === 0) {
+    throw new Error("BBDown 下载完成但未在临时目录找到音频文件");
+  }
+
+  /** @type {string[]} */
+  const outputFiles = [];
+  /** @type {string[]} */
+  const lines = [];
+  lines.push(`[post] 检测到 ${sourceFiles.length} 个源音频文件，目标格式=${audioFormat}`);
+
+  for (const sourceFile of sourceFiles) {
+    const sourceExt = path.extname(sourceFile).toLowerCase() || ".m4a";
+    const sourceBase = path.basename(sourceFile, path.extname(sourceFile));
+
+    if (audioFormat === "original") {
+      const outPath = ensureUniqueOutputPath(outputDir, sourceBase, sourceExt);
+      moveFileSafe(sourceFile, outPath);
+      outputFiles.push(outPath);
+      lines.push(`[post] 保留原始格式: ${path.basename(outPath)}`);
+      continue;
+    }
+
+    if (!ffmpegPath) {
+      throw new Error("当前输出格式需要 FFmpeg，但未配置 ffmpeg 路径");
+    }
+
+    const outPath = ensureUniqueOutputPath(outputDir, sourceBase, `.${audioFormat}`);
+    const ffmpegResult = await runFfmpegTranscode({
+      inputPath: sourceFile,
+      outputPath: outPath,
+      audioFormat,
+      audioBitrateKbps,
+      ffmpegPath,
+    });
+    outputFiles.push(outPath);
+    lines.push(`[post] 转码输出: ${path.basename(outPath)}`);
+    lines.push(...ffmpegResult.lines);
+  }
+
+  return { outputFiles, lines: tail(lines, 60) };
+}
+
+function discoverDownloadedAudioFiles(rootDir) {
+  if (!fs.existsSync(rootDir)) return [];
+  const allFiles = walkFilesRecursive(rootDir);
+  const found = allFiles.filter((filePath) => AUDIO_DISCOVER_EXTS.has(path.extname(filePath).toLowerCase()));
+  found.sort((a, b) => {
+    try {
+      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    } catch {
+      return 0;
+    }
+  });
+  return found;
+}
+
+function walkFilesRecursive(rootDir) {
+  /** @type {string[]} */
+  const out = [];
+  const stack = [rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+      } else if (entry.isFile()) {
+        out.push(fullPath);
+      }
+    }
+  }
+  return out;
+}
+
+function moveFileSafe(srcPath, dstPath) {
+  try {
+    fs.renameSync(srcPath, dstPath);
+  } catch (err) {
+    if (err && err.code === "EXDEV") {
+      fs.copyFileSync(srcPath, dstPath);
+      fs.unlinkSync(srcPath);
+      return;
+    }
+    throw err;
+  }
+}
+
+function runFfmpegTranscode({ inputPath, outputPath, audioFormat, audioBitrateKbps, ffmpegPath }) {
+  return new Promise((resolve, reject) => {
+    const args = buildFfmpegTranscodeArgs({ inputPath, outputPath, audioFormat, audioBitrateKbps });
+
+    let child;
+    try {
+      child = spawn(ffmpegPath, args, {
+        cwd: ROOT_DIR,
+        windowsHide: true,
+      });
+    } catch (err) {
+      reject(new Error(`无法启动 FFmpeg: ${err.message}`));
+      return;
+    }
+
+    /** @type {string[]} */
+    const lines = [];
+    const onData = (buf) => {
+      const text = String(buf || "");
+      const chunks = text.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      for (const line of chunks) {
+        lines.push(line);
+      }
+    };
+
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.on("error", (err) => reject(new Error(`无法启动 FFmpeg: ${err.message}`)));
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ lines: tail(lines, 20) });
+      } else {
+        const clue = tail(lines, 8).join(" | ");
+        reject(new Error(`FFmpeg 退出码 ${code}${clue ? `: ${clue}` : ""}`));
+      }
+    });
+  });
+}
+
+function buildFfmpegTranscodeArgs({ inputPath, outputPath, audioFormat, audioBitrateKbps }) {
+  const bitrateText = `${audioBitrateKbps}k`;
+  const args = ["-hide_banner", "-nostdin", "-y", "-i", inputPath, "-vn"];
+
+  switch (audioFormat) {
+    case "mp3":
+      args.push("-codec:a", "libmp3lame", "-b:a", bitrateText);
+      break;
+    case "m4a":
+      args.push("-codec:a", "aac", "-b:a", bitrateText);
+      break;
+    case "aac":
+      args.push("-codec:a", "aac", "-b:a", bitrateText);
+      break;
+    case "flac":
+      args.push("-codec:a", "flac");
+      break;
+    case "wav":
+      args.push("-codec:a", "pcm_s16le");
+      break;
+    case "ogg":
+      args.push("-codec:a", "libvorbis", "-b:a", bitrateText);
+      break;
+    case "opus":
+      args.push("-codec:a", "libopus", "-b:a", bitrateText);
+      break;
+    default:
+      throw new Error(`不支持的输出格式: ${audioFormat}`);
+  }
+
+  args.push("-map_metadata", "0", outputPath);
+  return args;
+}
+
+function ensureUniqueOutputPath(outputDir, baseName, extension) {
+  const safeBase = sanitizeFileStem(baseName);
+  const safeExt = extension.startsWith(".") ? extension : `.${extension}`;
+  let candidate = path.join(outputDir, `${safeBase}${safeExt}`);
+  let idx = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(outputDir, `${safeBase} (${idx})${safeExt}`);
+    idx += 1;
+  }
+  return candidate;
+}
+
+function sanitizeFileStem(baseName) {
+  const text = String(baseName || "").trim();
+  const replaced = text.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/\s+/g, " ");
+  return replaced || "audio";
 }
 
 async function getSuggestKeywords(keyword) {
@@ -672,6 +924,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parseDownloadOptions(body) {
+  const rawFormat = normalizeText(body.audioFormat).toLowerCase();
+  const audioFormat = rawFormat || "mp3";
+  if (!AUDIO_FORMAT_TYPES.has(audioFormat)) {
+    throw new HttpError(400, `audioFormat 不支持: ${audioFormat}`);
+  }
+
+  const audioBitrateKbps = clampInt(body.audioBitrateKbps, 192, 64, 320);
+  return {
+    audioFormat,
+    audioBitrateKbps,
+    bitrateIgnored: AUDIO_LOSSLESS_FORMATS.has(audioFormat),
+  };
+}
+
 function parseSearchOptions(body) {
   const orderType = sanitizeOrderType(normalizeText(body.orderType));
   const timeRange = clampInt(body.timeRange, -1, -1, 720);
@@ -868,7 +1135,9 @@ function toJobView(job) {
       outputDir: job.options.outputDir,
       maxConcurrent: job.options.maxConcurrent,
       bundledBbdownPath: BBDOWN_BIN_PATH,
+      bundledFfmpegPath: FFMPEG_BIN_PATH,
       searchOptions: job.options.searchOptions,
+      downloadOptions: job.options.downloadOptions,
     },
     items: job.items,
     logs: job.logs,

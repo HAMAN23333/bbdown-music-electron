@@ -93,6 +93,28 @@ function Download-ElectronArchive([string]$Url, [string]$ZipPath) {
     Invoke-WebRequest -Uri $Url -OutFile $ZipPath
 }
 
+function Ensure-BundledTool([string]$ToolName, [string]$ExePath, [string]$SetupScriptPath, [switch]$AllowMissingDigestFlag) {
+    if (Test-Path $ExePath) {
+        Write-Host "[$ToolName] use bundled binary: $ExePath"
+        return
+    }
+    if (-not (Test-Path $SetupScriptPath)) {
+        throw "[$ToolName] setup script missing: $SetupScriptPath"
+    }
+
+    Write-Host "[$ToolName] bundled binary missing, run setup: $SetupScriptPath"
+    $setupArgs = @{}
+    if ($AllowMissingDigestFlag) {
+        $setupArgs.AllowMissingDigest = $true
+    }
+    & $SetupScriptPath @setupArgs
+
+    if (-not (Test-Path $ExePath)) {
+        throw "[$ToolName] setup finished but binary still missing: $ExePath"
+    }
+    Write-Host "[$ToolName] setup completed: $ExePath"
+}
+
 $expectedElectronSha256 = Get-ReleaseAssetSha256 -ReleaseApi $ElectronReleaseApi -AssetName $ElectronAssetName -AllowMissingDigestFlag:$AllowMissingDigest
 if (-not [string]::IsNullOrWhiteSpace($expectedElectronSha256)) {
     Write-Host "[electron] expected sha256: $expectedElectronSha256"
@@ -143,6 +165,14 @@ catch {
 
 $ResourcesApp = Join-Path $WorkDir "resources\app"
 New-Item -ItemType Directory -Force -Path $ResourcesApp | Out-Null
+
+$BundledBbdownExe = Join-Path $Root "tools\bbdown\BBDown.exe"
+$BundledFfmpegExe = Join-Path $Root "tools\ffmpeg\ffmpeg.exe"
+$SetupBbdownScript = Join-Path $PSScriptRoot "setup-bbdown.ps1"
+$SetupFfmpegScript = Join-Path $PSScriptRoot "setup-ffmpeg.ps1"
+
+Ensure-BundledTool -ToolName "bbdown" -ExePath $BundledBbdownExe -SetupScriptPath $SetupBbdownScript -AllowMissingDigestFlag:$AllowMissingDigest
+Ensure-BundledTool -ToolName "ffmpeg" -ExePath $BundledFfmpegExe -SetupScriptPath $SetupFfmpegScript -AllowMissingDigestFlag:$AllowMissingDigest
 
 Copy-Item -Force (Join-Path $Root "packaging\electron\package.json") (Join-Path $ResourcesApp "package.json")
 Copy-Item -Force (Join-Path $Root "packaging\electron\main.js") (Join-Path $ResourcesApp "main.js")

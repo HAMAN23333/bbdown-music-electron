@@ -45,6 +45,23 @@
             <input id="cookie" type="text" placeholder="SESSDATA=...; bili_jct=...;" />
           </label>
           <label>
+            输出格式
+            <select id="audioFormat">
+              <option value="mp3">mp3（推荐）</option>
+              <option value="m4a">m4a</option>
+              <option value="aac">aac</option>
+              <option value="flac">flac（无损）</option>
+              <option value="wav">wav（无损）</option>
+              <option value="ogg">ogg</option>
+              <option value="opus">opus</option>
+              <option value="original">original（保持 BBDown 原始音频）</option>
+            </select>
+          </label>
+          <label>
+            音频比特率（kbps）
+            <input id="audioBitrateKbps" type="number" min="64" max="320" value="192" />
+          </label>
+          <label>
             时长筛选（分钟，-1表示不限）
             <input id="timeRange" type="number" min="-1" max="720" value="-1" />
           </label>
@@ -94,6 +111,8 @@
       const maxConcurrent = el("maxConcurrent");
       const orderType = el("orderType");
       const cookie = el("cookie");
+      const audioFormat = el("audioFormat");
+      const audioBitrateKbps = el("audioBitrateKbps");
       const timeRange = el("timeRange");
       const videoZoneType = el("videoZoneType");
       const timeStart = el("timeStart");
@@ -106,8 +125,12 @@
 
       let currentJobId = null;
       let pollTimer = null;
+      const BITRATE_DISABLED_FORMATS = new Set(["original", "flac", "wav"]);
 
       boot();
+      syncBitrateState();
+
+      audioFormat.addEventListener("change", syncBitrateState);
 
       async function boot() {
         try {
@@ -117,10 +140,15 @@
             if (data.defaultOutputDir && !outputDir.value) {
               outputDir.value = data.defaultOutputDir;
             }
+            const bbdownMsg = data.bundledBbdownReady
+              ? `BBDown 已就绪`
+              : `未找到 BBDown`;
+            const ffmpegMsg = data.bundledFfmpegReady
+              ? `FFmpeg 已就绪`
+              : `未找到 FFmpeg`;
             setHint(
-              data.bundledBbdownReady
-                ? `项目内置 BBDown 已就绪：${data.bundledBbdownPath}`
-                : `未找到项目内置 BBDown：${data.bundledBbdownPath}`
+              `${bbdownMsg}（${data.bundledBbdownPath}） | ${ffmpegMsg}（${data.bundledFfmpegPath}）`,
+              !data.bundledBbdownReady || !data.bundledFfmpegReady
             );
           }
         } catch (err) {
@@ -140,6 +168,8 @@
           outputDir: outputDir.value,
           maxConcurrent: Number(maxConcurrent.value || 2),
           cookie: cookie.value,
+          audioFormat: audioFormat.value,
+          audioBitrateKbps: Number(audioBitrateKbps.value || 192),
           orderType: orderType.value,
           timeRange: Number(timeRange.value || -1),
           videoZoneType: videoZoneType.value,
@@ -234,6 +264,16 @@
         if (pollTimer) {
           clearInterval(pollTimer);
           pollTimer = null;
+        }
+      }
+
+      function syncBitrateState() {
+        const disabled = BITRATE_DISABLED_FORMATS.has(audioFormat.value);
+        audioBitrateKbps.disabled = disabled;
+        if (disabled) {
+          audioBitrateKbps.title = "当前格式为无损或原始格式，不需要比特率。";
+        } else {
+          audioBitrateKbps.title = "";
         }
       }
 

@@ -14,3 +14,9 @@ Thumbs.db
 tools/bbdown/BBDown.exe
 tools/bbdown/*.zip
 tools/bbdown/_extract/
+tools/ffmpeg/ffmpeg.exe
+tools/ffmpeg/ffprobe.exe
+tools/ffmpeg/ffplay.exe
+tools/ffmpeg/*.dll
+tools/ffmpeg/*.zip
+tools/ffmpeg/_extract/

@@ -6,10 +6,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ($env:OS -ne "Windows_NT") {
-    throw "scripts/setup-bbdown.ps1 仅支持 Windows 环境。"
+    throw "scripts/setup-bbdown.ps1 supports Windows only."
 }
 if (-not [Environment]::Is64BitOperatingSystem) {
-    throw "scripts/setup-bbdown.ps1 仅支持 Windows x64。"
+    throw "scripts/setup-bbdown.ps1 supports Windows x64 only."
 }
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -35,7 +35,7 @@ function Convert-AssetDigestToSha256([string]$Digest) {
 function Assert-FileSha256([string]$FilePath, [string]$ExpectedSha256) {
     $actual = (Get-FileHash -Path $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $ExpectedSha256) {
-        throw "SHA256 校验失败。expected=$ExpectedSha256, actual=$actual, file=$FilePath"
+        throw "SHA256 mismatch. expected=$ExpectedSha256, actual=$actual, file=$FilePath"
     }
 }
 
